@@ -1,0 +1,136 @@
+# Simulator topology for the Lumina BI chatbot (example application).
+#   python simulator/simulate.py --topology examples/lumina/topology.yaml --backfill-minutes 120
+# Format reference: examples/demo-shop/topology.yaml
+
+application: lumina-bi-chatbot
+environment: qa
+users: [user01@corp.example, user02@corp.example, user03@corp.example, user04@corp.example,
+        user05@corp.example, user06@corp.example, user07@corp.example, user08@corp.example]
+
+hosts:
+  WIN-WEB-01:  {os: windows, os_version: "Windows Server 2022", role: web, ip: 10.20.1.10, instance_type: m6i.large,
+                cpus: 2, mem_total: 8, cpu_base: 28, mem_base: 61, disk_base: 54}
+  LNX-AI-01:   {os: linux, os_version: "Amazon Linux 2023", role: app, ip: 10.20.2.10, instance_type: m6i.xlarge,
+                cpus: 4, mem_total: 16, cpu_base: 42, mem_base: 72, disk_base: 47, extra_containers: [keycloak, postgres, redis]}
+  LNX-DATA-01: {os: linux, os_version: "Amazon Linux 2023", role: app, ip: 10.20.2.11, instance_type: m6i.xlarge,
+                cpus: 4, mem_total: 16, cpu_base: 35, mem_base: 58, disk_base: 41}
+  WIN-SQL-01:  {os: windows, os_version: "Windows Server 2022 / SQL Server 2022", role: database, ip: 10.20.3.10,
+                instance_type: r6i.xlarge, cpus: 4, mem_total: 32, cpu_base: 38, mem_base: 84, disk_base: 78,
+                metrics: [{name: mssql.user_connections, unit: "{connections}", range: [40, 90], service: "SQL Server"},
+                          {name: mssql.batch_requests_per_sec, unit: "1/s", range: [20, 140], service: "SQL Server"},
+                          {name: mssql.page_life_expectancy, unit: s, range: [900, 4000], service: "SQL Server"}]}
+
+services:
+  web-app:    {host: WIN-WEB-01, version: 3.4.1, language: nodejs, health: "https://bi.example/lumina"}
+  lumina-api: {host: LNX-AI-01, container: medm-lumina-api, version: 1.0.0, language: python, health: "http://lumina-api:8000/health"}
+  lumina-mcp: {host: LNX-AI-01, container: medm-lumina-mcp, version: 1.0.0, language: python, health: "http://lumina-mcp:8640/health"}
+  fabric-api: {host: LNX-DATA-01, container: medm-datafabric-api, version: 2.1.0, language: python, health: "http://fabric-api:8000/health"}
+  cube-api:   {host: LNX-DATA-01, container: medm-cube-api, version: 1.1.3, language: nodejs, health: "http://cube-api:4000/readyz"}
+
+checks:
+  - {name: "SQL Server connectivity", type: tcp, target: "WIN-SQL-01:1433", service: "SQL Server (EDM_DEMO)", host: LNX-DATA-01}
+
+x-sql: &sql
+  type: db
+  id: sql
+  system: mssql
+  database: EDM_DEMO
+  server: WIN-SQL-01
+  ms: 160
+  repeat: [1, 3]
+  statements:
+    - "SELECT asset_type, COUNT(*) FROM t_master_sec WHERE edm_status = 'A' GROUP BY asset_type"
+    - "SELECT TOP 10 p.name, COUNT(*) FROM t_master_pty p JOIN t_master_pty_role_sec r ON r.pty_id = p.id WHERE r.role_type = 'ISSUER' GROUP BY p.name ORDER BY 2 DESC"
+    - "SELECT YEAR(maturity_date), COUNT(*) FROM t_master_sec_fixed WHERE maturity_date > '2021-09-23' GROUP BY YEAR(maturity_date)"
+    - "SELECT rating, agency, COUNT(*) FROM t_master_sec_rating WHERE agency IN ('SP','MOODY','FITCH') GROUP BY rating, agency"
+    - "SELECT exchange_code, COUNT(*) FROM t_master_sec_listing GROUP BY exchange_code"
+
+flows:
+  - name: chat
+    weight: 0.7
+    root:
+      type: entry
+      service: web-app
+      method: POST
+      route: /api/chat
+      ms: 40
+      error_status: 502
+      calls:
+        - id: lumina_run
+          type: http
+          to: lumina-api
+          method: POST
+          route: /api/v1/runs
+          ms: 40
+          calls:
+            - {type: db, system: redis, database: cache, server: redis, statements: ["GET answer:?"], ms: 1.5}
+            - {type: db, system: postgresql, database: lumina, server: postgres, ms: 8,
+               statements: ["SELECT plan FROM plans WHERE tenant = $1 AND prompt_hash = $2"]}
+            - type: work
+              name: lumina.plan
+              ms: 15
+              calls:
+                - {id: plan_llm, type: llm, provider: aws.bedrock, model: anthropic.claude-sonnet-4-5,
+                   tokens_in: [5200, 9800], tokens_out: [400, 1400], ms: 2600,
+                   error: {type: ThrottlingException, message: "Rate exceeded for model claude-sonnet-4-5"}}
+            - {id: lumina_tool, type: mcp, to: lumina-mcp, tool: edm_get_data_product_fields, ms: 80, on_error: continue,
+               error: {type: TimeoutError, message: "upstream EDM did not answer in 8s"}}
+            - id: fabric
+              type: http
+              to: fabric-api
+              method: POST
+              route: /api/v1/query
+              ms: 60
+              error: {type: QueryError, message: "Query compilation failed"}
+              calls:
+                - {type: llm, provider: aws.bedrock, model: anthropic.claude-haiku-4-5,
+                   tokens_in: [2500, 5200], tokens_out: [200, 700], ms: 1800}
+                - {id: fabric_tool, type: mcp, to: lumina-mcp, tool: cube_meta, ms: 110, on_error: continue,
+                   error: {type: TimeoutError, message: "tool exceeded 8s budget"}}
+                - type: http
+                  to: cube-api
+                  method: POST
+                  route: /cubejs-api/v1/load
+                  ms: 60
+                  calls: [*sql]
+            - {type: work, name: lumina.execute, ms: 80, attrs: {lumina.engine: polars}}
+            - {type: llm, provider: aws.bedrock, model: anthropic.claude-haiku-4-5,
+               tokens_in: [1800, 3600], tokens_out: [150, 450], ms: 1400}
+
+  - name: history
+    weight: 0.22
+    root:
+      type: entry
+      service: web-app
+      method: GET
+      route: /chat/history
+      ms: 30
+      calls:
+        - type: http
+          to: lumina-api
+          method: GET
+          route: /api/v1/conversations
+          ms: 25
+          calls:
+            - {type: db, system: postgresql, database: lumina, server: postgres, ms: 12,
+               statements: ["SELECT id, title, updated_at FROM conversations WHERE principal = $1 ORDER BY updated_at DESC LIMIT 50"]}
+
+  - name: login
+    weight: 0.08
+    root:
+      type: entry
+      service: web-app
+      method: POST
+      route: /api/auth/login
+      ms: 40
+      calls:
+        - {type: http, to: keycloak, peer: "Keycloak (IdP)", method: POST,
+           route: /realms/edm/protocol/openid-connect/token, ms: 130}
+
+incidents:
+  - {name: slow_sql, latency: {sql: 25}, host_cpu: {WIN-SQL-01: 88}}
+  - {name: llm_throttling, errors: {plan_llm: 0.22}, latency: {plan_llm: 2.5}}
+  - {name: fabric_errors, errors: {fabric: 0.35}}
+  - {name: mcp_timeouts, latency: {lumina_tool: 90, fabric_tool: 70}, errors: {lumina_tool: 0.35, fabric_tool: 0.35}}
+  - {name: cube_down, service_down: cube-api}
+  - {name: cpu_spike_ai, host_cpu: {LNX-AI-01: 95}, latency: {lumina_run: 3}}

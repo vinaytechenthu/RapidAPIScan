@@ -1,0 +1,79 @@
+# RapidPulse configuration.
+#
+# The platform code is application-neutral; everything about the applications you
+# monitor is data in this file, and all of it is optional. Any service that sends
+# OpenTelemetry (OTLP) appears automatically; its `service.namespace` resource
+# attribute is the application it belongs to (the Application selector in the UI),
+# so one RapidPulse server monitors many applications side by side.
+#
+# Sample applications, each with its own pulse.yaml + simulator topology: see examples/.
+# Point at another file with the PULSE_CONFIG environment variable.
+
+server:
+  host: 0.0.0.0
+  port: 4400
+
+storage:
+  path: data/pulse.db
+  raw_retention_hours: 72      # traces, spans, logs (trace search / waterfall)
+  rollup_retention_days: 90    # 1-minute aggregates (dashboards, history, reports)
+  infra_retention_days: 30
+
+security:
+  # Set keys in production; senders use `X-Pulse-Key: <key>` or
+  # OTEL_EXPORTER_OTLP_HEADERS=x-pulse-key=<key>. Or set PULSE_INGEST_KEYS.
+  ingest_api_keys: []
+  # Basic auth for the UI/API, user: password (or put the UI behind your SSO proxy).
+  ui_users: {}
+  sanitize_sql: true           # strip literals from SQL before storing
+  redact_attribute_patterns: [authorization, password, secret, token, cookie, api_key, apikey, bearer]
+  # Request payloads and headers (sent by instrumented APIs, see docs). Header values whose name
+  # contains auth/cookie/key/token/secret/session/signature/password are always masked.
+  max_request_body_bytes: 16384    # longest request body kept; 0 = never store bodies
+  redact_body_fields: []           # regexes of body/query fields to mask; empty = built-in list
+  query_strings: mask              # mask = sensitive parameters only | redact = whole query | keep
+
+thresholds:
+  slow_query_ms: 1000          # database "slow query" threshold
+  slow_request_ms: 3000        # default service latency for health and the latency alert
+  apdex_t_ms: 500
+
+# Optional per-service display names, tiers and latency thresholds, keyed by the
+# OTel service.name (or a dependency's name as shown on the service map).
+# Give LLM-backed services a higher slow_request_ms — they are slow by design.
+services: {}
+#  orders-api:   {display: "Orders API", tier: "Linux container", slow_request_ms: 2000}
+#  assistant-api: {display: "AI Assistant", slow_request_ms: 15000}
+#  tools-mcp:    {display: "MCP tools", type: mcp}
+
+# Only needed if an application reports LLM data under its own attribute names
+# instead of the OTel GenAI (gen_ai.*) or OpenInference (llm.*) conventions.
+attribute_aliases: {}
+#  llm_model: [myapp.model]
+#  llm_input_tokens: [myapp.tokens_in]
+#  llm_output_tokens: [myapp.tokens_out]
+#  llm_cost: [myapp.cost_usd]
+
+# LLM prices (USD per 1M tokens) are built in for the Claude models (Fable, Opus, Sonnet, Haiku,
+# including Opus 5.5 at $4 input / $20 output, cache reads $0.20) - see apm/config.py, llm_pricing.
+# Rows here are added to that table; a row with the same `match` replaces the built-in one.
+# The most specific match wins, after cloud-provider prefixes/suffixes are removed
+# (us.anthropic.claude-opus-5-5-v1:0 -> claude-opus-5-5). Unknown models show as "not priced".
+# Optional per row: cache_read, cache_write, tiers: [{above_input_tokens: N, input: .., output: ..}]
+llm_pricing: []
+#  - {match: "claude-opus-5-5", input: 4.0, output: 20.0, cache_read: 0.20}   # e.g. your negotiated rate
+#  - {match: "my-inhouse-model", input: 0.5, output: 1.5}
+llm_cost_source: pricing        # pricing = the table above; span = the cost the application reports
+llm_cache_tokens_in_input: auto # does the input-token count already include cached tokens? auto|true|false
+
+# Central availability checks, run from the RapidPulse server every monitor_interval_seconds.
+# They detect "down" even when the server's own agent has gone silent.
+monitors: []
+#  - {name: "Orders API health", type: http, target: "http://<host>:8080/health", service: orders-api}
+#  - {name: "Database port",     type: tcp,  target: "<db-host>:1433", service: "SQL Server (shopdb)"}
+monitor_interval_seconds: 30
+
+default_alert_rules: true      # seed the 15 built-in rules on first start (editable in the UI)
+notifications:
+  webhooks: []      # Slack / Teams / generic incoming-webhook URLs (receive every alert)
+  smtp: null        # {host, port, user, password, from, to: [..], starttls: true, all_rules: true}

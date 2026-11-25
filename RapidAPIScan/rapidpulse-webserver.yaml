@@ -1,0 +1,86 @@
+# =====================================================================================
+#  RapidPulse - Windows web server (IIS) setup. Fill this in, then double-click
+#  install-webserver-windows.bat (next to this file) and accept the Administrator prompt.
+#
+#  One run sets up everything on this server:
+#    1. host agent          CPU, memory, disk, network, health checks  -> Infrastructure page
+#    2. .NET tracing        OpenTelemetry .NET agent for IIS            -> Traces, Services, Service map
+#    3. request capture     headers + payload of every request          -> Request card on each trace
+#  Run it again after changing this file: it updates the settings in place.
+#  Remove everything:  install-webserver-windows.bat -Uninstall
+#
+#  Format: "key: value". Indent with spaces. Lines starting with # are comments.
+#  Put values that contain ":" or "#" in quotes.
+# =====================================================================================
+
+# ---------------------------------------------------------------- REQUIRED
+rapidpulse:
+  # RapidPulse server (the master): http://<server-ip>:<port>
+  server: http://10.0.0.5:4400
+  # Ingest key printed by the server installer
+  # (also in C:\RapidPulse\config\pulse.local.yaml on the RapidPulse server, under ingest_api_keys)
+  key: ""
+
+application:
+  # Application these sites belong to: groups them with the application's other services
+  # (use the same name as on your other servers and containers)
+  name: my-application
+  # Environment: dev | qa | uat | prod ...
+  environment: qa
+
+# IIS applications to trace. "iis_app" is the name shown by
+#   %windir%\system32\inetsrv\appcmd.exe list app      (e.g. "Default Web Site/" or "EDM/")
+# "service" is the name it gets in RapidPulse. Add one "- iis_app:" block per application.
+sites:
+  - iis_app: "Default Web Site"
+    service: web-app
+
+# ---------------------------------------------------------------- OPTIONAL
+host_agent:
+  enabled: true
+  # Role shown on this server's card: web | app | database | worker ...
+  role: web
+  # Name shown in RapidPulse. Empty = this computer's host name
+  host_name: ""
+  # Seconds between samples
+  interval: 15
+  # Health checks run from this server. One "- name:" block per check;
+  # url is http(s)://... or tcp://host:port, service is the service it belongs to.
+  checks:
+    # - name: Web home page
+    #   url: http://localhost/
+    #   service: web-app
+
+dotnet_tracing:
+  enabled: true
+  # OpenTelemetry .NET automatic instrumentation release: latest, or a tag such as v1.12.0
+  version: latest
+  # Already installed: true = upgrade it to "version", false = keep the installed one
+  upgrade: false
+  # Newer releases can be signature-checked with the GitHub CLI (gh). It is used when installed;
+  # without it the check is skipped (the download is still HTTPS from GitHub).
+  # true = require the check (install gh from https://cli.github.com/ first)
+  verify_release: false
+  # No internet on this server? Put these two files from the release page
+  #   https://github.com/open-telemetry/opentelemetry-dotnet-instrumentation/releases
+  #   OpenTelemetry.DotNet.Auto.psm1 and opentelemetry-dotnet-instrumentation-windows.zip
+  # in one folder and give its path here.
+  offline_folder: ""
+
+capture:
+  # Request headers recorded on each trace. Names only (no wildcards).
+  # Leave out authorization and cookie: they would leave this server unmasked.
+  headers: [content-type, content-length, user-agent, referer, origin, accept, accept-language, host, x-request-id, x-correlation-id, x-forwarded-for]
+  # Request payload (JSON, form, XML, text) recorded on each trace; secrets are masked
+  payload: true
+  # Most bytes kept per request
+  payload_bytes: 8192
+  # Extra field names to mask, as a regular expression, e.g. "iban|account_no"
+  mask_fields: ""
+
+install:
+  # Python for the host agent. Empty = find it (Python 3.11 is installed if none is found)
+  python: ""
+  # No direct internet: internal PyPI mirror and/or web proxy (used only while installing)
+  pip_index_url: ""
+  proxy: ""

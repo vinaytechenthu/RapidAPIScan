@@ -1,0 +1,156 @@
+# Demo topology for the RapidPulse simulator — a fictional online shop with an AI assistant.
+# Copy this file to describe YOUR application: hosts, services, request flows and incidents.
+# Nothing in RapidPulse depends on these names; they only shape the generated telemetry.
+
+application: demo-shop        # becomes OTel service.namespace (the Application selector in the UI)
+environment: demo
+
+# ------------------------------------------------------------------ servers
+# cpu_base / mem_base / disk_base: typical utilisation %, for the simulated agent.
+hosts:
+  WEB-01:  {os: windows, os_version: "Windows Server 2022", role: web, ip: 10.0.1.10, instance_type: m6i.large,
+            cpus: 2, mem_total: 8, cpu_base: 25, mem_base: 58, disk_base: 52}
+  APP-01:  {os: linux, os_version: "Ubuntu 24.04", role: app, ip: 10.0.2.10, instance_type: m6i.xlarge,
+            cpus: 4, mem_total: 16, cpu_base: 40, mem_base: 66, disk_base: 45, extra_containers: [redis]}
+  APP-02:  {os: linux, os_version: "Ubuntu 24.04", role: app, ip: 10.0.2.11, instance_type: m6i.xlarge,
+            cpus: 4, mem_total: 16, cpu_base: 32, mem_base: 55, disk_base: 40}
+  DB-01:
+    {os: windows, os_version: "Windows Server 2022 / SQL Server 2022", role: database, ip: 10.0.3.10,
+     instance_type: r6i.xlarge, cpus: 4, mem_total: 32, cpu_base: 35, mem_base: 82, disk_base: 74,
+     # custom metrics reported by the agent (e.g. its SQL Server collector)
+     metrics: [{name: mssql.user_connections, unit: "{connections}", range: [30, 90], service: "SQL Server"},
+               {name: mssql.batch_requests_per_sec, unit: "1/s", range: [20, 160], service: "SQL Server"}]}
+
+# ----------------------------------------------------------------- services
+# Instrumented services (they emit spans). `container` = runs in Docker on that host.
+# `health` = a health URL the host's agent checks.
+services:
+  storefront:    {host: WEB-01, version: 4.2.0, language: nodejs, health: "https://localhost/health"}
+  orders-api:    {host: APP-01, container: orders-api, version: 2.3.1, language: java, health: "http://orders-api:8080/health"}
+  catalog-api:   {host: APP-01, container: catalog-api, version: 1.9.0, language: python, health: "http://catalog-api:8000/health"}
+  assistant-api: {host: APP-02, container: assistant-api, version: 0.8.2, language: python, health: "http://assistant-api:8000/health"}
+  tools-mcp:     {host: APP-02, container: tools-mcp, version: 0.3.0, language: python}
+
+# Extra checks reported by a host's agent (e.g. database connectivity).
+checks:
+  - {name: "SQL Server connectivity", type: tcp, target: "DB-01:1433", service: "SQL Server (shopdb)", host: APP-01}
+
+# ------------------------------------------------------------------- flows
+# A flow is one kind of user request: a call tree. Node types:
+#   entry  root request into `service`  (method, route)
+#   http   call another service `to` (method, route); if `to` is not in services it is an
+#          external dependency (shown with `peer` as its name)
+#   mcp    MCP tools/call to service `to` (tool)
+#   db     database query (system: mssql|postgresql|mysql|redis|..., database, server, statements: [...])
+#   llm    LLM call (provider, model or [models], tokens_in: [min,max], tokens_out: [min,max])
+#   work   internal processing step (name)
+# Common keys: ms (median own time), error_rate, id (for incidents), calls: [children],
+#   repeat: [min,max], on_error: fail|continue, error: {type, message}
+flows:
+  - name: browse
+    weight: 0.45
+    root:
+      type: entry
+      service: storefront
+      method: GET
+      route: /products
+      ms: 25
+      calls:
+        - type: http
+          to: catalog-api
+          method: GET
+          route: /api/products
+          ms: 12
+          calls:
+            - {type: db, system: redis, database: cache, server: redis, statements: ["GET products:page:?"], ms: 1.2}
+            - id: products_query
+              type: db
+              system: mssql
+              database: shopdb
+              server: DB-01
+              ms: 45
+              statements:
+                - "SELECT id, name, price FROM products WHERE category_id = 12 ORDER BY popularity DESC"
+                - "SELECT p.id, p.name, s.qty FROM products p JOIN stock s ON s.product_id = p.id WHERE p.brand = 'Acme'"
+
+  - name: checkout
+    weight: 0.3
+    root:
+      type: entry
+      service: storefront
+      method: POST
+      route: /checkout
+      ms: 30
+      calls:
+        - id: orders
+          type: http
+          to: orders-api
+          method: POST
+          route: /api/orders
+          ms: 40
+          calls:
+            - {type: db, system: mssql, database: shopdb, server: DB-01, ms: 18,
+               statements: ["INSERT INTO orders (customer_id, total) VALUES (4411, 129.90)"]}
+            - id: reserve
+              type: http
+              to: catalog-api
+              method: POST
+              route: /api/stock/reserve
+              ms: 10
+              calls:
+                - {type: db, system: mssql, database: shopdb, server: DB-01, ms: 22,
+                   statements: ["UPDATE stock SET qty = qty - 1 WHERE product_id = 981 AND qty > 0"]}
+            - id: payment
+              type: http
+              to: payment-gateway
+              peer: "Payment gateway"
+              method: POST
+              route: /v1/charges
+              ms: 320
+              error: {type: PaymentDeclined, message: "gateway returned 502"}
+
+  - name: assistant
+    weight: 0.25
+    root:
+      type: entry
+      service: storefront
+      method: POST
+      route: /assistant/ask
+      ms: 20
+      calls:
+        - type: http
+          to: assistant-api
+          method: POST
+          route: /api/ask
+          ms: 30
+          calls:
+            - {id: plan_llm, type: llm, provider: openai, model: gpt-4o, tokens_in: [1800, 4200], tokens_out: [150, 600], ms: 1400}
+            - id: tool_call
+              type: mcp
+              to: tools-mcp
+              tool: search_catalog
+              ms: 15
+              on_error: continue
+              calls:
+                - type: http
+                  to: catalog-api
+                  method: GET
+                  route: /api/products/search
+                  ms: 8
+                  calls:
+                    - {id: products_query, type: db, system: mssql, database: shopdb, server: DB-01, ms: 60,
+                       statements: ["SELECT TOP 20 id, name FROM products WHERE CONTAINS(name, 'running shoes')"]}
+            - {id: answer_llm, type: llm, provider: openai, model: gpt-4o-mini, tokens_in: [2500, 6000], tokens_out: [200, 700], ms: 1100}
+
+# ---------------------------------------------------------------- incidents
+# Rotated by the simulator (one 5-minute incident every 15 minutes) or pinned with --scenario.
+#   latency: {node id: multiplier}   errors: {node id: probability}
+#   service_down: service (calls get connection refused, container exits, health check fails)
+#   host_cpu: {host: cpu %}
+incidents:
+  - {name: db_slow, latency: {products_query: 40}, host_cpu: {DB-01: 92}}
+  - {name: llm_rate_limited, errors: {plan_llm: 0.3}, latency: {plan_llm: 2.5}}
+  - {name: payment_errors, errors: {payment: 0.35}}
+  - {name: mcp_timeouts, latency: {tool_call: 300}, errors: {tool_call: 0.4}}
+  - {name: catalog_down, service_down: catalog-api}
+  - {name: cpu_spike, host_cpu: {APP-01: 96}, latency: {orders: 3}}

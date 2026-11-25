@@ -1,0 +1,27 @@
+# RapidPulse on a single Linux EC2 (or any Docker host).
+#   docker compose up -d                      -> UI + OTLP on :4400
+#   docker compose --profile demo up -d       -> also runs the traffic simulator
+services:
+  pulse:
+    build: .
+    image: rapidpulse:1.0.0
+    restart: unless-stopped
+    ports: ["4400:4400"]
+    environment:
+      PULSE_INGEST_KEYS: ${PULSE_INGEST_KEYS:-}
+    volumes:
+      - pulse-data:/data
+      - ./config/pulse.yaml:/opt/pulse/config/pulse.yaml:ro
+
+  simulator:
+    profiles: ["demo"]
+    image: python:3.11-slim
+    working_dir: /opt/pulse
+    volumes: ["./simulator:/opt/pulse/simulator:ro", "./examples:/opt/pulse/examples:ro"]
+    environment:
+      PULSE_TOPOLOGY: ${PULSE_TOPOLOGY:-examples/demo-shop/topology.yaml}
+    command: ["sh", "-c", "pip install -q pyyaml==6.0.2 && python -u simulator/simulate.py --url http://pulse:4400 --backfill-minutes 120 --rate 0.5"]
+    depends_on: [pulse]
+
+volumes:
+  pulse-data:

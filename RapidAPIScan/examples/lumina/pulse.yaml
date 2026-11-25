@@ -1,0 +1,80 @@
+# RapidPulse configuration for the Lumina BI chatbot (example).
+# Use it with:  set PULSE_CONFIG=examples\lumina\pulse.yaml   (or copy the
+# `services`, `attribute_aliases` and `monitors` sections into config/pulse.yaml,
+# next to other applications' entries — one RapidPulse server can monitor many).
+
+server:
+  host: 0.0.0.0
+  port: 4400
+
+storage:
+  path: data/pulse.db
+  raw_retention_hours: 72      # traces, spans, logs (trace search / waterfall)
+  rollup_retention_days: 90    # 1-minute aggregates (dashboards, history, reports)
+  infra_retention_days: 30
+
+security:
+  # Set keys in production; senders use `X-Pulse-Key: <key>` or
+  # OTEL_EXPORTER_OTLP_HEADERS=x-pulse-key=<key>. Or set PULSE_INGEST_KEYS.
+  ingest_api_keys: []
+  # Basic auth for the UI/API (put the UI behind your SSO proxy for enterprise auth).
+  ui_users: {}
+  sanitize_sql: true
+  redact_attribute_patterns: [authorization, password, secret, token, cookie, api_key, apikey, bearer]
+  # Request payloads and headers (sent by instrumented APIs, see docs). Header values whose name
+  # contains auth/cookie/key/token/secret/session/signature/password are always masked.
+  max_request_body_bytes: 16384    # longest request body kept; 0 = never store bodies
+  redact_body_fields: []           # regexes of body/query fields to mask; empty = built-in list
+  query_strings: mask              # mask = sensitive parameters only | redact = whole query | keep
+
+thresholds:
+  slow_query_ms: 1000
+  slow_request_ms: 3000
+  apdex_t_ms: 500
+
+# Display metadata and per-service latency thresholds (keyed by OTel service.name,
+# or by dependency name as shown on the map).
+services:
+  web-app:            {display: "Web Application", tier: "Web (Windows EC2)", slow_request_ms: 20000}
+  lumina-api:         {display: "Lumina API", tier: "AI orchestration (Linux container)", slow_request_ms: 20000}
+  fabric-api:         {display: "Fabric API", tier: "Analytics (Linux container)", slow_request_ms: 12000}
+  cube-api:           {display: "Cube API", tier: "Semantic layer (Linux container)", slow_request_ms: 3000}
+  lumina-mcp:         {display: "MCP Server", tier: "Tools (Linux container)", type: mcp, slow_request_ms: 5000}
+  "LLM (aws.bedrock)": {display: "LLM — AWS Bedrock", slow_request_ms: 15000}
+  "SQL Server (EDM_DEMO)": {display: "SQL Server (EDM)", slow_request_ms: 2000}
+
+# Lumina's own span attributes (app/agents/proxy.py) next to the OpenInference ones.
+# `lumina.cost` is Lumina's own cost figure: used only for models the price table does not know
+# (set llm_cost_source: span to prefer it). Opus 5.5 is priced from the built-in table.
+attribute_aliases:
+  llm_model: [lumina.model_id]
+  llm_input_tokens: [lumina.input_tokens]
+  llm_output_tokens: [lumina.output_tokens]
+  llm_cost: [lumina.cost]
+
+# LLM prices (USD per 1M tokens) are built in for the Claude models (Fable, Opus, Sonnet, Haiku,
+# including Opus 5.5 at $4 input / $20 output, cache reads $0.20) - see apm/config.py, llm_pricing.
+# Rows here are added to that table; a row with the same `match` replaces the built-in one.
+# The most specific match wins, after Bedrock prefixes/suffixes are removed
+# (us.anthropic.claude-opus-5-5-v1:0 -> claude-opus-5-5). Unknown models show as "not priced".
+# Optional per row: cache_read, cache_write, tiers: [{above_input_tokens: N, input: .., output: ..}]
+llm_pricing: []
+#  - {match: "claude-opus-5-5", input: 4.0, output: 20.0, cache_read: 0.20}   # e.g. your negotiated rate
+#  - {match: "my-inhouse-model", input: 0.5, output: 1.5}
+llm_cost_source: pricing        # pricing = the table above; span = the cost the application reports
+llm_cache_tokens_in_input: auto # does the input-token count already include cached tokens? auto|true|false
+
+# Central availability checks, run from the RapidPulse server every monitor_interval_seconds.
+# Uncomment and point at the real endpoints.
+monitors: []
+#  - {name: "Web App login page",   type: http, target: "https://<web-host>/lumina", service: web-app}
+#  - {name: "Lumina API /health",   type: http, target: "http://<lumina-host>:8000/api/v1/health", service: lumina-api}
+#  - {name: "Fabric API /health",   type: http, target: "http://<fabric-host>:8000/health", service: fabric-api}
+#  - {name: "Cube API /readyz",     type: http, target: "http://<cube-host>:4000/readyz", service: cube-api}
+#  - {name: "SQL Server connectivity", type: tcp, target: "<sql-host>:1433", service: "SQL Server (EDM_DEMO)"}
+monitor_interval_seconds: 30
+
+default_alert_rules: true
+notifications:
+  webhooks: []      # Slack / Teams / generic incoming-webhook URLs (receive every alert)
+  smtp: null        # {host, port, user, password, from, to: [..], starttls: true, all_rules: true}

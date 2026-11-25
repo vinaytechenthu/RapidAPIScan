@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RapidPulse</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232a78d6'/><path d='M4 17h6l3-8 5 15 3-7h7' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body>
+<aside class="nav" id="nav">
+  <div class="brand"><svg viewBox="0 0 32 32" width="26" height="26"><rect width="32" height="32" rx="7" fill="var(--series-1)"/><path d="M4 17h6l3-8 5 15 3-7h7" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>RapidPulse</span></div>
+  <a href="#/overview" data-page="overview">Overview</a>
+  <a href="#/map" data-page="map">Service map</a>
+  <a href="#/services" data-page="services">Services &amp; APIs</a>
+  <a href="#/traces" data-page="traces">Traces</a>
+  <a href="#/ai" data-page="ai">AI monitoring</a>
+  <a href="#/database" data-page="database">Database</a>
+  <a href="#/infra" data-page="infra">Infrastructure</a>
+  <a href="#/alerts" data-page="alerts">Alerts <span class="pill crit" id="alertCount" hidden></span></a>
+  <a href="#/analytics" data-page="analytics">Analytics</a>
+  <a href="#/logs" data-page="logs">Logs</a>
+  <div class="nav-foot" id="sysinfo"></div>
+</aside>
+<main>
+  <header class="topbar">
+    <button class="icon-btn" id="navToggle" aria-label="Menu">☰</button>
+    <h1 id="pageTitle">Overview</h1>
+    <div class="controls">
+      <label>Application <select id="appSel"><option value="all">All applications</option></select></label>
+      <label>Range <select id="rangeSel">
+        <option value="5m">Last 5 min</option><option value="15m">Last 15 min</option><option value="1h" selected>Last 1 hour</option>
+        <option value="3h">Last 3 hours</option><option value="6h">Last 6 hours</option>
+        <option value="24h">Last 24 hours</option><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option>
+        <option value="custom">Custom range…</option>
+      </select></label>
+      <form id="customRange" class="custom-range" hidden>
+        <label>From <input type="datetime-local" id="crFrom" step="60" required></label>
+        <label>To <select id="crToMode" aria-label="End of the window"><option value="now">Now</option><option value="at">Date and time</option></select></label>
+        <input type="datetime-local" id="crTo" step="60" aria-label="End date and time">
+        <button class="primary" type="submit">Apply</button>
+      </form>
+      <label class="chk"><input type="checkbox" id="autoRefresh" checked> Live (30s)</label>
+      <button class="icon-btn" id="refreshBtn" title="Refresh now" aria-label="Refresh now">⟳</button>
+      <details class="menu" id="exportMenu">
+        <summary class="btn">Export PDF ▾</summary>
+        <div class="menu-list">
+          <a href="#" data-audience="developer"><b>Developer report</b><span>Technical: endpoints, errors, traces, dependencies, DB, AI, infrastructure, alerts</span></a>
+          <a href="#" data-audience="stakeholder"><b>Stakeholder summary</b><span>Short: overall status, key findings, service health, trends</span></a>
+        </div>
+      </details>
+      <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    </div>
+  </header>
+  <section id="view" class="view"></section>
+</main>
+<div id="drawer" class="drawer" hidden><div class="drawer-head"><h3 id="drawerTitle"></h3><button class="icon-btn" id="drawerClose" aria-label="Close">✕</button></div><div id="drawerBody" class="drawer-body"></div></div>
+<div id="tip" class="tip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

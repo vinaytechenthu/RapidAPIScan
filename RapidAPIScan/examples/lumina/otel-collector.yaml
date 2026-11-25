@@ -1,0 +1,57 @@
+# Drop-in replacement for medm-lumina-api/deploy/otel-collector.yaml.
+#
+# Keeps everything Lumina has today (logs to ./logs/otel, traces to Phoenix) and
+# ADDS RapidPulse as a second destination for traces, logs and metrics. No change
+# to the api's own exporter except pointing traces at the collector (see
+# INTEGRATION.md step 1), so Phoenix keeps working exactly as before.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  # Stamp the application name and the EC2 host on everything Lumina sends, so
+  # the api code doesn't have to know about either.
+  resource:
+    attributes:
+      - {key: service.namespace, value: "lumina-bi-chatbot", action: upsert}
+      - {key: host.name, value: "${env:PULSE_HOST_NAME}", action: insert}
+  resourcedetection:
+    detectors: [env, ec2, system]
+    timeout: 2s
+    override: false
+
+exporters:
+  file:
+    path: /var/log/lumina/lumina-logs.jsonl
+    rotation: {max_megabytes: 100, max_days: 30, max_backups: 10}
+  otlphttp/phoenix:
+    endpoint: http://phoenix:6006
+    tls: {insecure: true}
+  otlphttp/pulse:
+    endpoint: ${env:PULSE_OTLP_ENDPOINT}          # e.g. http://10.20.0.50:4400
+    headers:
+      x-pulse-key: ${env:PULSE_KEY}
+    tls: {insecure: true}
+    retry_on_failure: {enabled: true}
+    sending_queue: {enabled: true, queue_size: 5000}
+
+service:
+  telemetry:
+    logs: {level: warn}
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp/phoenix, otlphttp/pulse]
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [file, otlphttp/pulse]
+    metrics:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlphttp/pulse]

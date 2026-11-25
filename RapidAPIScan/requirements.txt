@@ -1,0 +1,11 @@
+# RapidPulse server
+fastapi==0.115.6
+uvicorn==0.32.1
+pyyaml==6.0.2
+reportlab==4.2.5             # PDF reports
+opentelemetry-proto==1.29.0   # OTLP protobuf decoding (pulls in protobuf)
+# agent
+psutil==6.1.0
+# tests / simulator
+httpx==0.28.1
+pytest==8.3.4

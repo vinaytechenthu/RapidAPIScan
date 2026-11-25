@@ -1,0 +1,11 @@
+# RapidPulse configuration for the demo-shop example (used by scripts/run-demo.ps1).
+# Only what differs from the defaults: display names and per-service latency targets.
+storage:
+  path: data/demo.db
+services:
+  storefront:    {display: "Storefront", tier: "Web (Windows)", slow_request_ms: 8000}
+  orders-api:    {display: "Orders API", tier: "Linux container", slow_request_ms: 2000}
+  catalog-api:   {display: "Catalog API", tier: "Linux container", slow_request_ms: 1000}
+  assistant-api: {display: "AI Assistant API", tier: "Linux container", slow_request_ms: 8000}
+  tools-mcp:     {display: "MCP tools", tier: "Linux container", type: mcp, slow_request_ms: 2000}
+  "LLM (openai)": {display: "LLM — OpenAI", slow_request_ms: 5000}
